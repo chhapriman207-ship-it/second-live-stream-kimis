@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Stream Platform - All-in-One</title>
+    <!-- HLS.js for playback -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.12/dist/hls.min.js"></script>
+    <!-- Crypto-js for JWT -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary: #6366f1; --primary-hover: #4f46e5;
+            --success: #10b981; --danger: #ef4444;
+            --bg: #0f172a; --card: #1e293b;
+            --input: #334155; --text: #f8fafc;
+            --text2: #94a3b8; --border: #475569;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg); color: var(--text);
+            min-height: 100vh; line-height: 1.6;
+        }
+        .container { max-width: 900px; margin: 0 auto; padding: 2rem 1rem; }
+        header {
+            background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+            padding: 2rem; text-align: center;
+        }
+        header h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+        header p { opacity: 0.9; }
+        
+        .card {
+            background: var(--card); border-radius: 12px;
+            padding: 2rem; margin: 1.5rem 0;
+            border: 1px solid var(--border);
+        }
+        .card h2 { margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem; }
+        
+        .form-group { margin-bottom: 1.5rem; }
+        label { display: block; margin-bottom: 0.5rem; color: var(--text2); font-size: 0.875rem; }
+        input, select {
+            width: 100%; padding: 0.875rem 1rem;
+            background: var(--input); border: 2px solid var(--border);
+            border-radius: 8px; color: var(--text); font-size: 1rem;
+        }
+        input:focus, select:focus { outline: none; border-color: var(--primary); }
+        
+        .btn {
+            display: inline-flex; align-items: center; justify-content: center;
+            gap: 0.5rem; padding: 1rem 2rem; font-size: 1rem;
+            font-weight: 600; border: none; border-radius: 8px;
+            cursor: pointer; transition: all 0.3s;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+            color: white; width: 100%;
+        }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 10px 20px -5px rgba(99,102,241,0.4); }
+        .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+        
+        .result {
+            margin-top: 1.5rem; padding: 1.5rem;
+            background: rgba(16,185,129,0.1); border: 2px solid var(--success);
+            border-radius: 8px; display: none;
+        }
+        .result.show { display: block; animation: slideIn 0.3s ease-out; }
+        @keyframes slideIn { from { opacity: 0; transform: translateY(-10px); } }
+        
+        .link-box {
+            display: flex; gap: 0.5rem; margin: 1rem 0;
+        }
+        .link-box input {
+            flex: 1; font-family: monospace; font-size: 0.875rem;
+        }
+        .btn-copy {
+            padding: 0.75rem 1rem; background: var(--primary);
+            color: white; border: none; border-radius: 6px;
+            cursor: pointer; white-space: nowrap;
+        }
+        .btn-copy:hover { background: var(--primary-hover); }
+        .btn-copy.copied { background: var(--success); }
+        
+        .error {
+            margin-top: 1rem; padding: 1rem;
+            background: rgba(239,68,68,0.1); border: 2px solid var(--danger);
+            border-radius: 8px; color: var(--danger); display: none;
+        }
+        .error.show { display: block; }
+        
+        /* Player Styles */
+        .player-section { display: none; }
+        .player-section.show { display: block; }
+        
+        .video-wrapper {
+            position: relative; background: #000;
+            border-radius: 12px; overflow: hidden;
+            aspect-ratio: 16/9;
+        }
+        video { width: 100%; height: 100%; object-fit: contain; }
+        
+        .player-controls {
+            position: absolute; bottom: 0; left: 0; right: 0;
+            padding: 1rem; background: linear-gradient(to top, rgba(0,0,0,0.9), transparent);
+            display: flex; align-items: center; gap: 0.75rem;
+            opacity: 0; transition: opacity 0.3s;
+        }
+        .video-wrapper:hover .player-controls { opacity: 1; }
+        
+        .ctrl-btn {
+            width: 40px; height: 40px;
+            background: rgba(255,255,255,0.1); border: none;
+            border-radius: 8px; color: white; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .ctrl-btn:hover { background: rgba(255,255,255,0.2); }
+        .ctrl-btn svg { width: 20px; height: 20px; fill: currentColor; }
+        
+        .quality-menu {
+            position: absolute; bottom: 100%; right: 0;
+            margin-bottom: 0.5rem; background: var(--card);
+            border: 1px solid var(--border); border-radius: 8px;
+            padding: 0.5rem; min-width: 120px; display: none;
+        }
+        .quality-menu.show { display: block; }
+        .quality-opt {
+            display: block; width: 100%; padding: 0.5rem;
+            background: none; border: none; color: var(--text);
+            text-align: left; cursor: pointer; border-radius: 4px;
+        }
+        .quality-opt:hover { background: rgba(99,102,241,0.2); }
+        .quality-opt.active { color: var(--primary); font-weight: 500; }
+        
+        .loading-overlay, .error-overlay {
+            position: absolute; inset: 0;
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+            background: rgba(0,0,0,0.9); z-index: 10;
+        }
+        .error-overlay { display: none; z-index: 20; }
+        .error-overlay.show { display: flex; }
+        
+        .spinner {
+            width: 50px; height: 50px;
+            border: 4px solid rgba(255,255,255,0.1);
+            border-top-color: var(--primary); border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        
+        .live-badge {
+            display: inline-flex; align-items: center; gap: 0.5rem;
+            padding: 0.375rem 0.75rem;
+            background: rgba(239,68,68,0.2); color: var(--danger);
+            border-radius: 20px; font-size: 0.75rem; font-weight: 600;
+            text-transform: uppercase;
+        }
+        .live-dot {
+            width: 8px; height: 8px; background: var(--danger);
+            border-radius: 50%; animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse { 50% { opacity: 0.5; transform: scale(1.2); } }
+        
+        .stats-bar {
+            display: flex; gap: 1.5rem; padding: 1rem;
+            background: rgba(0,0,0,0.5); border-radius: 8px;
+            margin-top: 1rem; font-size: 0.875rem;
+        }
+        .stat { display: flex; gap: 0.5rem; }
+        .stat-label { color: var(--text2); }
+        
+        .toast {
+            position: fixed; bottom: 2rem; left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            padding: 1rem 1.5rem; background: var(--card);
+            border-radius: 8px; box-shadow: var(--shadow);
+            opacity: 0; transition: all 0.3s; z-index: 100;
+        }
+        .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+        
+        .hidden { display: none !important; }
+        
+        /* Server Status */
+        .server-status {
+            position: fixed; top: 1rem; right: 1rem;
+            padding: 0.5rem 1rem; background: var(--card);
+            border-radius: 8px; font-size: 0.875rem;
+            display: flex; align-items: center; gap: 0.5rem;
+            z-index: 1000;
+        }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .status-dot.online { background: var(--success); }
+        .status-dot.offline { background: var(--danger); }
+        
+        .tabs {
+            display: flex; gap: 0.5rem; margin-bottom: 1.5rem;
+        }
+        .tab {
+            padding: 0.75rem 1.5rem; background: var(--input);
+            border: none; border-radius: 8px; color: var(--text);
+            cursor: pointer; font-weight: 500;
+        }
+        .tab.active { background: var(--primary); }
+        
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+    </style>
+<base target="_blank">
+</head>
+<body>
+    <div class="server-status" id="serverStatus">
+        <span class="status-dot online" id="statusDot"></span>
+        <span id="statusText">Standalone Mode</span>
+    </div>
+
+    <header>
+        <h1>Live Stream Platform</h1>
+        <p>Generate secure links & watch HLS streams</p>
+    </header>
+
+    <div class="container">
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab active" onclick="showTab('generator')">Generate Link</button>
+            <button class="tab" onclick="showTab('player')">Watch Stream</button>
+        </div>
+
+        <!-- Generator Tab -->
+        <div id="generator" class="tab-content active">
+            <div class="card">
+                <h2>Generate Stream Link</h2>
+                <form id="genForm">
+                    <div class="form-group">
+                        <label>HLS Stream URL (.m3u8)</label>
+                        <input type="url" id="streamUrl" placeholder="https://example.com/stream.m3u8" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Link Expiry</label>
+                        <select id="expiry">
+                            <option value="30">30 minutes</option>
+                            <option value="60">1 hour</option>
+                            <option value="120" selected>2 hours</option>
+                            <option value="240">4 hours</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-primary" id="genBtn">
+                        Generate Live Link
+                    </button>
+                </form>
+                
+                <div class="error" id="genError"></div>
+                
+                <div class="result" id="genResult">
+                    <div style="color: var(--success); font-weight: 600; margin-bottom: 1rem;">
+                        Link Generated!
+                    </div>
+                    <div class="link-box">
+                        <input type="text" id="playerLink" readonly>
+                        <button class="btn-copy" id="copyBtn">Copy</button>
+                    </div>
+                    <div class="link-box">
+                        <input type="text" id="directUrl" readonly>
+                        <button class="btn-copy" id="copyDirectBtn">Copy URL</button>
+                    </div>
+                    <button class="btn btn-primary" onclick="playGenerated()" style="margin-top: 1rem;">
+                        Play Now
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Player Tab -->
+        <div id="player" class="tab-content">
+            <div class="card">
+                <h2>Watch Stream</h2>
+                <div class="form-group">
+                    <label>Stream URL or Generated Link</label>
+                    <input type="text" id="playUrl" placeholder="Paste HLS URL or generated link">
+                </div>
+                <button class="btn btn-primary" onclick="loadPlayer()" style="margin-bottom: 1rem;">
+                    Load Stream
+                </button>
+                
+                <div class="player-section" id="playerSection">
+                    <div class="video-wrapper" id="videoWrapper">
+                        <video id="video" playsinline></video>
+                        
+                        <div class="loading-overlay" id="loading">
+                            <div class="spinner"></div>
+                            <p style="margin-top: 1rem; color: var(--text2);">Connecting...</p>
+                        </div>
+                        
+                        <div class="error-overlay" id="playError">
+                            <div style="font-size: 3rem; margin-bottom: 1rem;">⚠️</div>
+                            <h3 style="margin-bottom: 0.5rem;">Stream Error</h3>
+                            <p id="playErrorMsg" style="color: var(--text2); margin-bottom: 1rem;"></p>
+                            <button class="btn btn-primary" onclick="retryStream()">Retry</button>
+                        </div>
+                        
+                        <div class="player-controls">
+                            <button class="ctrl-btn" onclick="togglePlay()" title="Play/Pause">
+                                <svg viewBox="0 0 24 24" id="playSvg"><path d="M8 5v14l11-7z"/></svg>
+                                <svg viewBox="0 0 24 24" id="pauseSvg" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                            </button>
+                            
+                            <button class="ctrl-btn" onclick="toggleMute()" title="Mute">
+                                <svg viewBox="0 0 24 24" id="volSvg"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
+                                <svg viewBox="0 0 24 24" id="muteSvg" style="display:none"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73 4.27 3z"/></svg>
+                            </button>
+                            
+                            <div style="flex:1"></div>
+                            
+                            <div style="position:relative">
+                                <button class="ctrl-btn" onclick="toggleQuality()" title="Quality">
+                                    <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 10h2v7H7v-7zm4-3h2v10h-2V7zm4 6h2v4h-2v-4z"/></svg>
+                                </button>
+                                <div class="quality-menu" id="qualityMenu"></div>
+                            </div>
+                            
+                            <button class="ctrl-btn" onclick="shareStream()" title="Share">
+                                <svg viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg>
+                            </button>
+                            
+                            <button class="ctrl-btn" onclick="toggleFullscreen()" title="Fullscreen">
+                                <svg viewBox="0 0 24 24" id="fsSvg"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+                                <svg viewBox="0 0 24 24" id="exitFsSvg" style="display:none"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="stats-bar">
+                        <span class="live-badge" id="liveBadge" style="display:none">
+                            <span class="live-dot"></span> Live
+                        </span>
+                        <div class="stat">
+                            <span class="stat-label">Quality:</span>
+                            <span id="statQuality">-</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Buffer:</span>
+                            <span id="statBuffer">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        // ============================================
+        // JWT & Token Management (Client-Side)
+        // ============================================
+        const JWT_SECRET = 'live-stream-platform-secret-key-32-chars-long';
+        
+        const streams = new Map(); // In-memory stream store
+        
+        function base64UrlEncode(str) {
+            return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+        }
+        
+        function base64UrlDecode(str) {
+            str += new Array(5 - str.length % 4).join('=');
+            return atob(str.replace(/\-/g, '+').replace(/\_/g, '/'));
+        }
+        
+        function generateJWT(payload, expiresInMinutes) {
+            const header = { alg: 'HS256', typ: 'JWT' };
+            const now = Math.floor(Date.now() / 1000);
+            const exp = now + (expiresInMinutes * 60);
+            
+            const fullPayload = { ...payload, iat: now, exp };
+            
+            const encodedHeader = base64UrlEncode(JSON.stringify(header));
+            const encodedPayload = base64UrlEncode(JSON.stringify(fullPayload));
+            
+            const signature = CryptoJS.HmacSHA256(
+                encodedHeader + '.' + encodedPayload,
+                JWT_SECRET
+            ).toString(CryptoJS.enc.Base64);
+            
+            return encodedHeader + '.' + encodedPayload + '.' + 
+                   signature.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+        }
+        
+        function verifyJWT(token) {
+            try {
+                const parts = token.split('.');
+                if (parts.length !== 3) return null;
+                
+                const payload = JSON.parse(base64UrlDecode(parts[1]));
+                const now = Math.floor(Date.now() / 1000);
+                
+                if (payload.exp && payload.exp < now) {
+                    return null; // Expired
+                }
+                
+                return payload;
+            } catch (e) {
+                return null;
+            }
+        }
+        
+        function generateStreamId() {
+            return Array.from(crypto.getRandomValues(new Uint8Array(16)))
+                .map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+        
+        function encryptUrl(url) {
+            return CryptoJS.AES.encrypt(url, JWT_SECRET).toString();
+        }
+        
+        function decryptUrl(encrypted) {
+            try {
+                const bytes = CryptoJS.AES.decrypt(encrypted, JWT_SECRET);
+                return bytes.toString(CryptoJS.enc.Utf8);
+            } catch (e) {
+                return null;
+            }
+        }
+
+        // ============================================
+        // Stream Generation
+        // ============================================
+        let currentStream = null;
+        
+        document.getElementById('genForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const url = document.getElementById('streamUrl').value.trim();
+            const expiry = parseInt(document.getElementById('expiry').value);
+            
+            if (!url.match(/\.m3u8(\?|$)/)) {
+                showError('URL must end with .m3u8');
+                return;
+            }
+           
