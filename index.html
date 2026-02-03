@@ -435,4 +435,343 @@
                 showError('URL must end with .m3u8');
                 return;
             }
-           
+            
+            const streamId = generateStreamId();
+            const encryptedUrl = encryptUrl(url);
+            
+            const token = generateJWT({
+                streamId,
+                url: encryptedUrl,
+                type: 'stream-access'
+            }, expiry);
+            
+            const expiresAt = new Date(Date.now() + expiry * 60000);
+            
+            streams.set(streamId, {
+                streamId,
+                originalUrl: url,
+                encryptedUrl,
+                createdAt: new Date(),
+                expiresAt,
+                token
+            });
+            
+            currentStream = { streamId, token, url };
+            
+            // Generate links
+            const baseUrl = window.location.origin + window.location.pathname;
+            const playerUrl = `${baseUrl}?play=${encodeURIComponent(token)}&sid=${streamId}`;
+            
+            document.getElementById('playerLink').value = playerUrl;
+            document.getElementById('directUrl').value = url;
+            document.getElementById('genResult').classList.add('show');
+            document.getElementById('genError').classList.remove('show');
+            
+            showToast('Link generated successfully!');
+        });
+        
+        function showError(msg) {
+            const err = document.getElementById('genError');
+            err.textContent = msg;
+            err.classList.add('show');
+        }
+        
+        // Copy buttons
+        document.getElementById('copyBtn').addEventListener('click', function() {
+            copyToClipboard(document.getElementById('playerLink').value, this);
+        });
+        
+        document.getElementById('copyDirectBtn').addEventListener('click', function() {
+            copyToClipboard(document.getElementById('directUrl').value, this);
+        });
+        
+        async function copyToClipboard(text, btn) {
+            try {
+                await navigator.clipboard.writeText(text);
+                const original = btn.textContent;
+                btn.textContent = 'Copied!';
+                btn.classList.add('copied');
+                setTimeout(() => {
+                    btn.textContent = original;
+                    btn.classList.remove('copied');
+                }, 2000);
+            } catch (e) {
+                showToast('Failed to copy');
+            }
+        }
+
+        // ============================================
+        // HLS Player
+        // ============================================
+        let hls = null;
+        let isPlaying = false;
+        let qualities = [];
+        
+        const video = document.getElementById('video');
+        
+        function loadPlayer() {
+            const input = document.getElementById('playUrl').value.trim();
+            if (!input) {
+                showToast('Please enter a stream URL');
+                return;
+            }
+            
+            let streamUrl = input;
+            
+            // Check if it's a generated link
+            const urlParams = new URLSearchParams(input.split('?')[1]);
+            const token = urlParams.get('play') || urlParams.get('token');
+            
+            if (token) {
+                const payload = verifyJWT(token);
+                if (!payload) {
+                    showToast('Invalid or expired link');
+                    return;
+                }
+                streamUrl = decryptUrl(payload.url);
+                if (!streamUrl) {
+                    showToast('Failed to decrypt stream URL');
+                    return;
+                }
+            }
+            
+            document.getElementById('playerSection').classList.add('show');
+            initializeHLS(streamUrl);
+        }
+        
+        function initializeHLS(url) {
+            // Cleanup previous instance
+            if (hls) {
+                hls.destroy();
+                hls = null;
+            }
+            
+            document.getElementById('loading').style.display = 'flex';
+            document.getElementById('playError').classList.remove('show');
+            document.getElementById('liveBadge').style.display = 'none';
+            
+            if (Hls.isSupported()) {
+                hls = new Hls({
+                    maxBufferLength: 30,
+                    liveSyncDurationCount: 3,
+                    liveMaxLatencyDurationCount: 10,
+                    enableWorker: true,
+                    lowLatencyMode: true
+                });
+                
+                hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+                    console.log('HLS attached');
+                });
+                
+                hls.on(Hls.Events.MANIFEST_PARSED, (e, data) => {
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('liveBadge').style.display = 'inline-flex';
+                    
+                    populateQualities(data.levels);
+                    video.play().catch(() => {});
+                });
+                
+                hls.on(Hls.Events.ERROR, (e, data) => {
+                    if (data.fatal) {
+                        showPlayError('Stream failed to load. Please check the URL and try again.');
+                    }
+                });
+                
+                hls.on(Hls.Events.BUFFER_EOS, () => {
+                    showPlayError('Stream has ended.');
+                });
+                
+                hls.loadSource(url);
+                hls.attachMedia(video);
+                
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                // Native HLS (Safari)
+                video.src = url;
+                video.addEventListener('loadedmetadata', () => {
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('liveBadge').style.display = 'inline-flex';
+                    video.play();
+                });
+                video.addEventListener('error', () => {
+                    showPlayError('Failed to load stream');
+                });
+            } else {
+                showPlayError('Your browser does not support HLS playback. Please use Chrome, Firefox, or Safari.');
+            }
+        }
+        
+        function populateQualities(levels) {
+            qualities = levels;
+            const menu = document.getElementById('qualityMenu');
+            menu.innerHTML = '<button class="quality-opt active" data-q="-1">Auto</button>';
+            
+            levels.forEach((level, i) => {
+                const btn = document.createElement('button');
+                btn.className = 'quality-opt';
+                btn.dataset.q = i;
+                btn.textContent = `${level.height}p`;
+                btn.onclick = () => setQuality(i, btn);
+                menu.appendChild(btn);
+            });
+        }
+        
+        function setQuality(level, btn) {
+            if (!hls) return;
+            hls.currentLevel = level;
+            
+            document.querySelectorAll('.quality-opt').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById('qualityMenu').classList.remove('show');
+            
+            showToast(level === -1 ? 'Quality: Auto' : `Quality: ${qualities[level]?.height}p`);
+        }
+        
+        function showPlayError(msg) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('playErrorMsg').textContent = msg;
+            document.getElementById('playError').classList.add('show');
+            document.getElementById('liveBadge').style.display = 'none';
+        }
+        
+        function retryStream() {
+            document.getElementById('playError').classList.remove('show');
+            loadPlayer();
+        }
+        
+        // Player controls
+        function togglePlay() {
+            if (video.paused) {
+                video.play();
+            } else {
+                video.pause();
+            }
+        }
+        
+        video.addEventListener('play', () => {
+            isPlaying = true;
+            document.getElementById('playSvg').style.display = 'none';
+            document.getElementById('pauseSvg').style.display = 'block';
+        });
+        
+        video.addEventListener('pause', () => {
+            isPlaying = false;
+            document.getElementById('playSvg').style.display = 'block';
+            document.getElementById('pauseSvg').style.display = 'none';
+        });
+        
+        function toggleMute() {
+            video.muted = !video.muted;
+            document.getElementById('volSvg').style.display = video.muted ? 'none' : 'block';
+            document.getElementById('muteSvg').style.display = video.muted ? 'block' : 'none';
+        }
+        
+        function toggleQuality() {
+            document.getElementById('qualityMenu').classList.toggle('show');
+        }
+        
+        async function shareStream() {
+            const url = window.location.href;
+            try {
+                if (navigator.share) {
+                    await navigator.share({ title: 'Live Stream', url });
+                } else {
+                    await navigator.clipboard.writeText(url);
+                    showToast('Link copied!');
+                }
+            } catch (e) {}
+        }
+        
+        function toggleFullscreen() {
+            const wrapper = document.getElementById('videoWrapper');
+            if (!document.fullscreenElement) {
+                wrapper.requestFullscreen();
+            } else {
+                document.exitFullscreen();
+            }
+        }
+        
+        document.addEventListener('fullscreenchange', () => {
+            const isFs = !!document.fullscreenElement;
+            document.getElementById('fsSvg').style.display = isFs ? 'none' : 'block';
+            document.getElementById('exitFsSvg').style.display = isFs ? 'block' : 'none';
+        });
+        
+        // Stats update
+        setInterval(() => {
+            if (!hls) return;
+            
+            const level = hls.currentLevel;
+            if (level >= 0 && qualities[level]) {
+                document.getElementById('statQuality').textContent = qualities[level].height + 'p';
+            } else {
+                document.getElementById('statQuality').textContent = 'Auto';
+            }
+            
+            if (video.buffered.length > 0) {
+                const buf = video.buffered.end(0) - video.currentTime;
+                document.getElementById('statBuffer').textContent = Math.round(buf) + 's';
+            }
+        }, 1000);
+        
+        // Close quality menu on outside click
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.quality-selector')) {
+                document.getElementById('qualityMenu').classList.remove('show');
+            }
+        });
+
+        // ============================================
+        // Tab Navigation
+        // ============================================
+        function showTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            
+            event.target.classList.add('active');
+            document.getElementById(tab).classList.add('active');
+        }
+        
+        function playGenerated() {
+            document.getElementById('playUrl').value = document.getElementById('playerLink').value;
+            showTab.call({ target: document.querySelectorAll('.tab')[1] }, 'player');
+            document.querySelectorAll('.tab')[1].classList.add('active');
+            document.querySelectorAll('.tab')[0].classList.remove('active');
+            loadPlayer();
+        }
+
+        // ============================================
+        // Toast
+        // ============================================
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+
+        // ============================================
+        // Check URL params on load
+        // ============================================
+        window.addEventListener('load', () => {
+            const params = new URLSearchParams(window.location.search);
+            const token = params.get('play') || params.get('token');
+            const sid = params.get('sid');
+            
+            if (token) {
+                // Auto-switch to player tab
+                document.querySelectorAll('.tab')[1].click();
+                document.getElementById('playUrl').value = window.location.href;
+                loadPlayer();
+            }
+        });
+        
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && document.getElementById('player').classList.contains('active')) {
+                e.preventDefault();
+                togglePlay();
+            }
+        });
+    </script>
+</body>
+</html>
